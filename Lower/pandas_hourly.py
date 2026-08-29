@@ -23,6 +23,11 @@ import time
 
 import pandas as pd
 import psutil
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Results")
 
 
 def resolve_csv_paths(args):
@@ -61,14 +66,34 @@ def main():
     df = pd.concat(frames, ignore_index=True)
     del frames
 
-    df["hour"] = df["pickup_datetime"].dt.strftime("%H")
-    hourly_counts = df.groupby("hour").size()
+    df["hour"] = df["pickup_datetime"].dt.hour
+    hourly_counts = df.groupby("hour").size().sort_index()
+
+    # Ensure results dir exists at workspace root: ../Results
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+
+    # Save counts to CSV
+    counts_csv = os.path.join(RESULTS_DIR, "hourly_counts_combined.csv")
+    hourly_counts.to_frame(name="count").to_csv(counts_csv)
+
+    # Plot bar chart and save
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(hourly_counts.index.astype(str), hourly_counts.values, color="#4C78A8")
+    ax.set_title("Hourly trip counts (Pandas, combined months)")
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel("Number of trips")
+    plt.tight_layout()
+    png_path = os.path.join(RESULTS_DIR, "hourly_counts_combined.png")
+    fig.savefig(png_path)
+    plt.close(fig)
 
     elapsed = time.time() - start
     mem_after = process.memory_info().rss
 
     print("=== Hourly trip counts (Pandas, combined months) ===")
     print(hourly_counts.to_string())
+    print(f"Saved counts CSV: {counts_csv}")
+    print(f"Saved bar chart PNG: {png_path}")
     print()
     print(f"Total records processed: {len(df):,}")
     print(f"Execution time: {elapsed:.2f} seconds")
