@@ -1,0 +1,295 @@
+================================================================================
+Distributed Taxi Trip Analytics Using Apache Hadoop, HDFS and Python MapReduce
+Prepared by: KWIZERA Rene
+Combined 4-Month Dataset: fhv_tripdata_2026-01 through -04
+================================================================================
+
+
+--------------------------------------------------------------------------------
+SECTION 0 — START HADOOP AND VERIFY THE ENVIRONMENT
+--------------------------------------------------------------------------------
+
+cd C:\hadoop\sbin
+start-dfs.cmd
+start-yarn.cmd
+
+REM Verify all four daemons are running
+jps
+REM Expected output includes: NameNode, DataNode, ResourceManager, NodeManager
+
+REM Confirm all Mapper/Reducer scripts are present before running anything
+cd C:\Users\user\Desktop\Bigdata\Project\Lower
+dir *.py
+
+
+--------------------------------------------------------------------------------
+SECTION 1 — DATASET PREPARATION (Parquet -> CSV, Section 3.4 / 5 of the report)
+--------------------------------------------------------------------------------
+
+REM One-time dependency for the conversion script
+pip install pyarrow --break-system-packages
+
+REM Convert all four monthly Parquet files to CSV, streamed in row batches
+python parquet_to_csv.py --input-dir "C:\Users\user\Desktop\Bigdata" --output-dir "C:\Users\user\Desktop\Bigdata\CSV"
+
+
+--------------------------------------------------------------------------------
+SECTION 2 — HDFS DIRECTORY STRUCTURE (Section 6 of the assignment brief)
+--------------------------------------------------------------------------------
+
+REM Core structure actually used by this project
+hdfs dfs -mkdir -p /taxi_project/input/raw/CSV
+hdfs dfs -mkdir -p /taxi_project/input/cleaned
+hdfs dfs -mkdir -p /taxi_project/output/hourly
+hdfs dfs -mkdir -p /taxi_project/output/daily
+hdfs dfs -mkdir -p /taxi_project/output/locations
+hdfs dfs -mkdir -p /taxi_project/output/locations_topn
+hdfs dfs -mkdir -p /taxi_project/output/routes
+hdfs dfs -mkdir -p /taxi_project/output/routes_top20
+hdfs dfs -mkdir -p /taxi_project/output/duration
+hdfs dfs -mkdir -p /taxi_project/output/anomalies
+hdfs dfs -mkdir -p /taxi_project/archive
+
+REM NOTE: the assignment brief's suggested skeleton also lists
+REM /taxi_project/output/revenue/ and /taxi_project/output/payment/.
+REM These two analyses are documented substitutions in Section 9.4 and 9.5
+REM of the report (the fhv_tripdata schema has no fare_amount, tip_amount,
+REM or payment_type fields), so no MapReduce job writes to them. The
+REM directories are still created below for structural completeness.
+hdfs dfs -mkdir -p /taxi_project/output/revenue
+hdfs dfs -mkdir -p /taxi_project/output/payment
+
+
+--------------------------------------------------------------------------------
+SECTION 3 — UPLOAD DATASET TO HDFS (Section 5.1 / 6 of the report)
+--------------------------------------------------------------------------------
+
+hdfs dfs -put "C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-01.csv" /taxi_project/input/raw/CSV/
+hdfs dfs -put "C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-02.csv" /taxi_project/input/raw/CSV/
+hdfs dfs -put "C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-03.csv" /taxi_project/input/raw/CSV/
+hdfs dfs -put "C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-04.csv" /taxi_project/input/raw/CSV/
+
+REM Confirm all 4 months landed on HDFS
+hdfs dfs -ls -R /taxi_project/input/raw/CSV
+
+REM If any single month is missing, re-upload just that one:
+REM hdfs dfs -put "C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-0X.csv" /taxi_project/input/raw/CSV/
+
+
+--------------------------------------------------------------------------------
+SECTION 4 — HDFS STORAGE / CLUSTER EVIDENCE (Sections 5.1, 5.2 of the report)
+--------------------------------------------------------------------------------
+
+hdfs dfs -ls -h /taxi_project/input/raw/CSV
+hdfs dfs -du -h /taxi_project/input/raw/CSV
+hdfs dfsadmin -report
+
+
+--------------------------------------------------------------------------------
+SECTION 5 — CLEAR OLD OUTPUT DIRECTORIES BEFORE RE-RUNNING
+--------------------------------------------------------------------------------
+REM Hadoop refuses to write to an output directory that already exists,
+REM so every job's output directory must be removed before a re-run.
+
+hdfs dfs -rm -r -f /taxi_project/input/cleaned
+hdfs dfs -rm -r -f /taxi_project/output/hourly
+hdfs dfs -rm -r -f /taxi_project/output/daily
+hdfs dfs -rm -r -f /taxi_project/output/locations
+hdfs dfs -rm -r -f /taxi_project/output/locations_topn
+hdfs dfs -rm -r -f /taxi_project/output/routes
+hdfs dfs -rm -r -f /taxi_project/output/routes_top20
+hdfs dfs -rm -r -f /taxi_project/output/duration
+hdfs dfs -rm -r -f /taxi_project/output/anomalies
+
+
+--------------------------------------------------------------------------------
+SECTION 6 — DATA CLEANING JOB (Section 6 / 7 of the report)
+--------------------------------------------------------------------------------
+REM -input points at the FOLDER, not a single file. This is the one
+REM argument change that combines all 4 months (Section 3.3 of the report)
+REM no Mapper/Reducer code changes needed.
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/raw/CSV ^
+  -output /taxi_project/input/cleaned ^
+  -mapper "python mapper_cleaning.py" ^
+  -reducer "python reducer_cleaning.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_cleaning.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_cleaning.py"
+
+REM Verify cleaned record count two independent ways (Section 6.2):
+hdfs dfs -cat /taxi_project/input/cleaned/part-00000 | find /c /v ""
+
+
+--------------------------------------------------------------------------------
+SECTION 7 — HOURLY DEMAND (Assignment 8a / Report Section 9.1)
+--------------------------------------------------------------------------------
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/hourly ^
+  -mapper "python mapper_hourly.py" ^
+  -reducer "python reducer_hourly.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_hourly.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_hourly.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 8 — DAILY DEMAND (Assignment 8b / Report Section 9.2)
+--------------------------------------------------------------------------------
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/daily ^
+  -mapper "python mapper_daily.py" ^
+  -reducer "python reducer_daily.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_daily.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_daily.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 9 — PICKUP ZONE RANKING, WORKFLOW 1 OF 2 (Assignment 8c/9 / Report 9.3, 10.1)
+--------------------------------------------------------------------------------
+
+REM Job 1: count trips per pickup zone
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/locations ^
+  -mapper "python mapper_location.py" ^
+  -reducer "python reducer_location.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_location.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_location.py"
+
+REM Job 2: consumes Job 1's HDFS output directly, produces Top 10 / Bottom 10
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/output/locations ^
+  -output /taxi_project/output/locations_topn ^
+  -mapper "python mapper_topn.py" ^
+  -reducer "python reducer_topn.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_topn.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_topn.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 10 — BUSIEST ROUTES, WORKFLOW 2 OF 2 (Assignment 8g/9 / Report 9.7, 10.2)
+--------------------------------------------------------------------------------
+
+REM Job 1: count trips per PUlocationID-DOlocationID route key
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/routes ^
+  -mapper "python mapper_route.py" ^
+  -reducer "python reducer_route.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_route.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_route.py"
+
+REM Job 2: reuses mapper_topn.py unchanged (Section 10.2), Top 20 routes only
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/output/routes ^
+  -output /taxi_project/output/routes_top20 ^
+  -mapper "python mapper_topn.py" ^
+  -reducer "python reducer_route_topn.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_topn.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_route_topn.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 11 — TRIP DURATION ANALYSIS (Assignment 8h, substituted for 8f / Report 9.8)
+--------------------------------------------------------------------------------
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/duration ^
+  -mapper "python mapper_duration.py" ^
+  -reducer "python reducer_duration.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_duration.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_duration.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 12 — ANOMALY DETECTION (Assignment 8i / Report 9.9)
+--------------------------------------------------------------------------------
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/cleaned ^
+  -output /taxi_project/output/anomalies ^
+  -mapper "python mapper_anomaly.py" ^
+  -reducer "python reducer_anomaly.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_anomaly.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_anomaly.py"
+
+
+--------------------------------------------------------------------------------
+SECTION 13 — YARN VERIFICATION (Section 11 of the assignment brief / report)
+--------------------------------------------------------------------------------
+REM Every job above ran as application_1788027227987_000N. Verify via CLI
+REM in addition to the ResourceManager web UI screenshots.
+
+yarn application -list -appStates ALL
+yarn application -status application_1788027227987_0002
+REM Repeat -status for each application ID (_0002 through _0010) as needed.
+
+REM Web UI evidence (Section 16 of the brief):
+REM   http://localhost:8088/cluster
+REM   http://localhost:9870/explorer.html#/taxi_project/output
+
+
+--------------------------------------------------------------------------------
+SECTION 14 — PULL RESULTS BACK TO LOCAL DISK (Section 16 evidence)
+--------------------------------------------------------------------------------
+
+hdfs dfs -get /taxi_project/output/hourly/part-00000 C:\Users\user\Desktop\Bigdata\Results\hourly.tsv
+hdfs dfs -get /taxi_project/output/daily/part-00000 C:\Users\user\Desktop\Bigdata\Results\daily.tsv
+hdfs dfs -get /taxi_project/output/locations/part-00000 C:\Users\user\Desktop\Bigdata\Results\locations.tsv
+hdfs dfs -get /taxi_project/output/locations_topn/part-00000 C:\Users\user\Desktop\Bigdata\Results\locations_topn.tsv
+hdfs dfs -get /taxi_project/output/routes/part-00000 C:\Users\user\Desktop\Bigdata\Results\routes.tsv
+hdfs dfs -get /taxi_project/output/routes_top20/part-00000 C:\Users\user\Desktop\Bigdata\Results\routes_top20.tsv
+hdfs dfs -get /taxi_project/output/duration/part-00000 C:\Users\user\Desktop\Bigdata\Results\duration.tsv
+hdfs dfs -get /taxi_project/output/anomalies/part-00000 C:\Users\user\Desktop\Bigdata\Results\anomalies.tsv
+
+REM Quick sanity check of each result file
+type C:\Users\user\Desktop\Bigdata\Results\hourly.tsv
+type C:\Users\user\Desktop\Bigdata\Results\daily.tsv
+type C:\Users\user\Desktop\Bigdata\Results\locations_topn.tsv
+type C:\Users\user\Desktop\Bigdata\Results\routes_top20.tsv
+type C:\Users\user\Desktop\Bigdata\Results\duration.tsv
+type C:\Users\user\Desktop\Bigdata\Results\anomalies.tsv
+
+
+--------------------------------------------------------------------------------
+SECTION 15 — PERFORMANCE COMPARISON: PANDAS VS HADOOP (Section 12, compulsory)
+--------------------------------------------------------------------------------
+
+pip install pandas psutil --break-system-packages
+
+REM Move the unrelated fhvhv files out first so Pandas only reads the 4
+REM intended fhv_tripdata files (see Section 12 discussion in the report)
+mkdir C:\Users\user\Desktop\Bigdata\CSV_fhvhv_unused
+move C:\Users\user\Desktop\Bigdata\CSV\fhvhv_tripdata_2026-*.csv C:\Users\user\Desktop\Bigdata\CSV_fhvhv_unused\
+
+REM Combined 4-month Pandas timing run (fills Table 12's missing cell)
+python pandas_hourly_timed.py --input-dir "C:\Users\user\Desktop\Bigdata\CSV" --label combined-4-months
+
+REM Optional: Jan-only run for the side-by-side comparison already in Table 12
+mkdir C:\Users\user\Desktop\Bigdata\CSV_jan_only
+copy C:\Users\user\Desktop\Bigdata\CSV\fhv_tripdata_2026-01.csv C:\Users\user\Desktop\Bigdata\CSV_jan_only\
+python pandas_hourly_timed.py --input-dir "C:\Users\user\Desktop\Bigdata\CSV_jan_only" --label jan-only
+
+type timing_log.csv
+
+
+--------------------------------------------------------------------------------
+SECTION 16 : FULL CONSOLE LOG CAPTURE (evidence for Section 16 of brief)
+--------------------------------------------------------------------------------
+REM Redirects both stdout and stderr (where Hadoop Streaming counters are
+REM printed) to a log file, for direct inclusion as report evidence.
+
+hadoop jar "C:\hadoop\share\hadoop\tools\lib\hadoop-streaming-3.4.3.jar" ^
+  -input /taxi_project/input/raw/CSV ^
+  -output /taxi_project/input/cleaned2 ^
+  -mapper "python mapper_cleaning.py" ^
+  -reducer "python reducer_cleaning.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\mapper_cleaning.py" ^
+  -file "C:\Users\user\Desktop\Bigdata\Project\Lower\reducer_cleaning.py" ^
+  > C:\Users\user\Desktop\Bigdata\Results\cleaning_console.log 2>&1
+
